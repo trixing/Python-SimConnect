@@ -509,7 +509,7 @@ class MqttWorker(threading.Thread):
                 value = aq.get(datapoint_name)
                 if value != dataset_map.get(datapoint_name, None):
                     dataset_map[datapoint_name] = value
-                    client.publish(client_prefix + dataset_name + '/' + datapoint_name, value)
+                    mqtt_client.publish(client_prefix + dataset_name + '/' + datapoint_name, value)
 
     def run(self):
         while not self._stop_event.wait(timeout=0.01):
@@ -528,7 +528,7 @@ def mqtt_on_message(client, userdata, message):
 
 
 if mqtt_client is not None:
-    client.onmessage = mqtt_on_message
+    mqtt_client.onmessage = mqtt_on_message
     t = MqttWorker()
     atexit.register(t.stop)
     t.start()

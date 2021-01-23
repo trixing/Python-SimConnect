@@ -2,7 +2,31 @@ from flask import Flask, jsonify, render_template, request
 from SimConnect import *
 from time import sleep
 import random
+import paho.mqtt.client as mqtt
+import platform
+import json
 
+import atexit
+import threading
+import argparse
+import sys
+
+
+parser = argparse.ArgumentParser(description='Process command line.')
+parser.add_argument('--mqtt_server', default=None)
+args = parser.parse_args()
+
+mqtt_client = None
+if args.mqtt_server:
+    client_name = platform.node()
+    client_prefix = '/fs/%s/' % client_name
+
+    mqtt_client = mqtt.Client()
+    mqtt_client.connect_async(args.mqtt_server)
+    mqtt_client.subscribe(client_prefix + 'action')
+    mqtt_client.loop_start()
+
+    print('mqtt_enabled', args.mqtt_server, client_name, client_prefix)
 
 app = Flask(__name__)
 
@@ -279,21 +303,22 @@ def AttInd():
 	return render_template("attitude-indicator/index.html")
 
 
-def get_dataset(data_type):
-	if data_type == "navigation": request_to_action = request_location
-	if data_type == "airspeed": request_to_action = request_airspeed
-	if data_type == "compass": request_to_action = request_compass
-	if data_type == "vertical_speed": request_to_action = request_vertical_speed
-	if data_type == "fuel": request_to_action = request_fuel
-	if data_type == "flaps": request_to_action = request_flaps
-	if data_type == "throttle": request_to_action = request_throttle
-	if data_type == "gear": request_to_action = request_gear
-	if data_type == "trim": request_to_action = request_trim
-	if data_type == "autopilot": request_to_action = request_autopilot
-	if data_type == 'cabin': request_to_action = request_cabin
-	#if data_type == "ui": request_to_action = request_ui   # see comment above as to why I've removed this
+datasets = dict(
+    ('navigation', request_location),
+    ('airspeed', request_airspeed),
+    ('compass', request_compass),
+    ('vertical_speed', request_vertical_speed),
+    ('fuel', request_fuel),
+    ('flaps', request_flaps),
+    ('throttle', request_throttle),
+    ('gear', request_gear),
+    ('trim', request_trim),
+    ('autopilot', request_autopilot),
+    ('cabin', request_cabin),
+)
 
-	return request_to_action
+def get_dataset(data_type):
+    return datasets.get(data_type, [])
 
 
 @app.route('/ui')
@@ -469,6 +494,44 @@ def custom_emergency(emergency_type):
 		text_to_return = "Engine " + str(engine_to_set_on_fire) + " on fire"
 
 	return text_to_return
+
+
+class MqttWorker(threading.Thread):
+    def __init__(self,  *args, **kwargs):
+        super(StoppableThread, self).__init__(*args, **kwargs)
+        self._stop_event = threading.Event()
+
+    def mqtt_worker(self):
+        dataset_map = {}  #I have renamed map to dataset_map as map is used elsewhere
+        data_dictionary = get_dataset(dataset_name)
+        for dataset_name, data_dictionary in datasets.iteritems():
+            for datapoint_name in data_dictionary:
+                value = aq.get(datapoint_name)
+                if value != dataset_map.get(datapoint_name, None):
+                    dataset_map[datapoint_name] = value
+                    client.publish(client_prefix + dataset_name + '/' + datapoint_name, value)
+
+    def run(self):
+        while not self._stop_event.wait(timeout=0.01):
+            self.mqtt_worker()
+
+    def stop(self):
+        self._stop_event.set()
+
+
+def mqtt_on_message(client, userdata, message):
+    print(client, userdata, message, message.topic, message.payload)
+    j = json.parse(message.payload)
+    print(j)
+    # set_datapoint(datapoint_name, index=None, value_to_use=None):
+    pass
+
+
+if mqtt_client is not None:
+    client.onmessage = mqtt_on_message
+    t = MqttWorker()
+    atexit.register(t.stop)
+    t.start()
 
 
 app.run(host='0.0.0.0', port=5000, debug=True)

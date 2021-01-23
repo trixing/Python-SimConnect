@@ -487,6 +487,22 @@ def custom_emergency(emergency_type):
 	return text_to_return
 
 
+class ConnectWatch(threading.Thread):
+    def __init__(self,  *args, **kwargs):
+        super(ConnectWatch, self).__init__(*args, **kwargs)
+        self._stop_event = threading.Event()
+
+    def run(self):
+        while not self._stop_event.wait(timeout=1):
+            try:
+                sm.connect()
+            except ConnectionError:
+                print("Sim not running")
+
+    def stop(self):
+        self._stop_event.set()
+
+        
 class MqttWorker(threading.Thread):
     def __init__(self,  *args, **kwargs):
         super(MqttWorker, self).__init__(*args, **kwargs)
@@ -552,8 +568,13 @@ if args.mqtt_server:
     mqtt_client.loop_start()
 
     t = MqttWorker()
+    t.daemon = True
     atexit.register(t.stop)
     t.start()
 
-sm.connect()
+c = ConnectWatch()
+c.daemon = True
+atexit.register(c.stop)
+c.start()
+
 app.run(host='0.0.0.0', port=5000, debug=True)

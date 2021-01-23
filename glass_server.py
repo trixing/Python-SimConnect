@@ -17,16 +17,7 @@ parser.add_argument('--mqtt_server', default=None)
 args = parser.parse_args()
 
 mqtt_client = None
-if args.mqtt_server:
-    client_name = platform.node()
-    client_prefix = '/fs/%s/' % client_name
 
-    mqtt_client = mqtt.Client()
-    mqtt_client.connect_async(args.mqtt_server)
-    mqtt_client.subscribe(client_prefix + 'action')
-    mqtt_client.loop_start()
-
-    print('mqtt_enabled', args.mqtt_server, client_name, client_prefix)
 
 app = Flask(__name__)
 
@@ -508,7 +499,7 @@ class MqttWorker(threading.Thread):
                 value = aq.get(datapoint_name)
                 if value != self._dataset_map.get(datapoint_name, None):
                     self._dataset_map[datapoint_name] = value
-                    print("pub", datapoint_name, value)
+                    #print("pub", datapoint_name, value)
                     mqtt_client.publish(client_prefix + dataset_name + '/' + datapoint_name, value)
 
     def run(self):
@@ -520,18 +511,49 @@ class MqttWorker(threading.Thread):
 
 
 def mqtt_on_message(client, userdata, message):
-    print(client, userdata, message, message.topic, message.payload)
-    j = json.parse(message.payload)
-    print(j)
-    # set_datapoint(datapoint_name, index=None, value_to_use=None):
-    pass
+    print(message.topic, message.payload)
+    topic = message.topic[len(client_prefix):]
+    print("Topic", topic)
+    sep = topic.split("/")
+    if sep[0] != "set":
+        print("unknown topic")
+        return
+    if len(sep) == 1:
+        try:
+            j = json.loads(message.payload)
+        except json.decoder.JSONDecodeError as e:
+            print("Cannot parse message")
+            return
+        print(j)
+        set_datapoint(
+            j['name'], index=j.get('index', None),
+            value_to_use=j.get('value', None))
+    elif len(sep) == 2:
+        set_datapoint(sep[1], value_to_use=message.payload)
+    elif len(sep) == 3:
+        set_datapoint(sep[1], index=int(sep[2]), value_to_use=message.payload)
+    else:
+        print("do not understand topic", sep)
 
+def mqtt_on_connect(client, userdata, flags, rc):
+    client.subscribe(client_prefix + 'set/#')
+    client.subscribe(client_prefix + 'set')
 
-if mqtt_client is not None:
-    mqtt_client.onmessage = mqtt_on_message
+if args.mqtt_server:
+    client_name = platform.node()
+    client_prefix = '/fs/%s/' % client_name
+
+    mqtt_client = mqtt.Client()
+    mqtt_client.connect_async(args.mqtt_server)
+
+    print('mqtt_enabled', args.mqtt_server, client_name, client_prefix)
+    mqtt_client.on_message = mqtt_on_message
+    mqtt_client.on_connect = mqtt_on_connect
+    mqtt_client.loop_start()
+
     t = MqttWorker()
     atexit.register(t.stop)
     t.start()
 
-sm.connect()
+#sm.connect()
 app.run(host='0.0.0.0', port=5000, debug=True)

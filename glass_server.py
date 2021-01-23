@@ -33,7 +33,7 @@ app = Flask(__name__)
 # SIMCONNECTION RELATED STARTUPS
 
 # Create simconnection
-sm = SimConnect()
+sm = SimConnect(auto_connect=False)
 ae = AircraftEvents(sm)
 aq = AircraftRequests(sm, _time=10)
 
@@ -303,7 +303,7 @@ def AttInd():
 	return render_template("attitude-indicator/index.html")
 
 
-datasets = dict(
+datasets = dict((
     ('navigation', request_location),
     ('airspeed', request_airspeed),
     ('compass', request_compass),
@@ -315,7 +315,7 @@ datasets = dict(
     ('trim', request_trim),
     ('autopilot', request_autopilot),
     ('cabin', request_cabin),
-)
+))
 
 def get_dataset(data_type):
     return datasets.get(data_type, [])
@@ -498,17 +498,17 @@ def custom_emergency(emergency_type):
 
 class MqttWorker(threading.Thread):
     def __init__(self,  *args, **kwargs):
-        super(StoppableThread, self).__init__(*args, **kwargs)
+        super(MqttWorker, self).__init__(*args, **kwargs)
         self._stop_event = threading.Event()
+        self._dataset_map = {}
 
     def mqtt_worker(self):
-        dataset_map = {}  #I have renamed map to dataset_map as map is used elsewhere
-        data_dictionary = get_dataset(dataset_name)
-        for dataset_name, data_dictionary in datasets.iteritems():
+        for dataset_name, data_dictionary in datasets.items():
             for datapoint_name in data_dictionary:
                 value = aq.get(datapoint_name)
-                if value != dataset_map.get(datapoint_name, None):
-                    dataset_map[datapoint_name] = value
+                if value != self._dataset_map.get(datapoint_name, None):
+                    self._dataset_map[datapoint_name] = value
+                    print("pub", datapoint_name, value)
                     mqtt_client.publish(client_prefix + dataset_name + '/' + datapoint_name, value)
 
     def run(self):
@@ -533,5 +533,5 @@ if mqtt_client is not None:
     atexit.register(t.stop)
     t.start()
 
-
+sm.connect()
 app.run(host='0.0.0.0', port=5000, debug=True)

@@ -555,5 +555,5 @@ if args.mqtt_server:
     atexit.register(t.stop)
     t.start()
 
-#sm.connect()
+sm.connect()
 app.run(host='0.0.0.0', port=5000, debug=True)

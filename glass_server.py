@@ -13,7 +13,7 @@ import sys
 
 
 parser = argparse.ArgumentParser(description='Process command line.')
-parser.add_argument('--mqtt_server', default=None)
+parser.add_argument('--mqtt_server', default="192.168.178.8")
 args = parser.parse_args()
 
 mqtt_client = None
@@ -24,7 +24,7 @@ app = Flask(__name__)
 # SIMCONNECTION RELATED STARTUPS
 
 # Create simconnection
-sm = SimConnect(auto_connect=False)
+sm = SimConnect(auto_connect=True)
 ae = AircraftEvents(sm)
 aq = AircraftRequests(sm, _time=10)
 
@@ -233,6 +233,17 @@ request_trim = [
 	'RUDDER_TRIM_PCT',  # The trim position of the rudder. Zero is no trim.
 	'RUDDER_TRIM',  # Angle deflection
 ]
+
+request_autopilot_short = [
+        	'AUTOPILOT_MASTER',
+	#'AUTOPILOT_AVAILABLE',
+	'AUTOPILOT_HEADING_LOCK',
+	'AUTOPILOT_ALTITUDE_LOCK',
+	'AUTOPILOT_ALTITUDE_LOCK_VAR',
+	'AUTOPILOT_ATTITUDE_HOLD',
+	'AUTOPILOT_VERTICAL_HOLD_VAR',
+
+        ]
 
 request_autopilot = [
 	'AUTOPILOT_MASTER',
@@ -491,11 +502,14 @@ class ConnectWatch(threading.Thread):
     def __init__(self,  *args, **kwargs):
         super(ConnectWatch, self).__init__(*args, **kwargs)
         self._stop_event = threading.Event()
+        self._connected = False
 
     def run(self):
         while not self._stop_event.wait(timeout=1):
             try:
                 sm.connect()
+                self._connected = True
+                return
             except ConnectionError:
                 print("Sim not running")
 
@@ -510,17 +524,31 @@ class MqttWorker(threading.Thread):
         self._dataset_map = {}
 
     def mqtt_worker(self):
-        for dataset_name, data_dictionary in datasets.items():
+        for dataset_name, data_dictionary in [("autopilot", request_autopilot_short)]:# datasets.items():
             for datapoint_name in data_dictionary:
-                value = aq.get(datapoint_name)
-                if value != self._dataset_map.get(datapoint_name, None):
-                    self._dataset_map[datapoint_name] = value
-                    #print("pub", datapoint_name, value)
-                    mqtt_client.publish(client_prefix + dataset_name + '/' + datapoint_name, value)
+                raw = aq.get(datapoint_name)
+                if raw is None:
+                        continue
+                value = round(raw)
+                oldvalue = self._dataset_map.get(dataset_name + datapoint_name, None)
+                if value != oldvalue:
+                    self._dataset_map[dataset_name + datapoint_name] = value
+                    print("pub", dataset_name, datapoint_name, oldvalue, value)
+                    mqtt_client.publish(client_prefix + dataset_name + '/' + datapoint_name, value, qos=0)
 
     def run(self):
-        while not self._stop_event.wait(timeout=0.01):
+        counter = 0
+        while True:
+            #not self._stop_event.wait(timeout=0.01):
             self.mqtt_worker()
+            if self._stop_event.is_set():
+                    return
+            sleep(0.02)
+            if counter > 50 * 10:
+                    self._dataset_map = {}
+                    counter = 0
+            else:
+                    counter += 1
 
     def stop(self):
         self._stop_event.set()
@@ -530,6 +558,10 @@ def mqtt_on_message(client, userdata, message):
     print(message.topic, message.payload)
     topic = message.topic[len(client_prefix):]
     print("Topic", topic)
+    if topic == "trigger":
+            eventname = message.payload.decode('utf-8')
+            print( trigger_event(eventname))
+            return
     sep = topic.split("/")
     if sep[0] != "set":
         print("unknown topic")
@@ -554,6 +586,7 @@ def mqtt_on_message(client, userdata, message):
 def mqtt_on_connect(client, userdata, flags, rc):
     client.subscribe(client_prefix + 'set/#')
     client.subscribe(client_prefix + 'set')
+    client.subscribe(client_prefix + 'trigger')
 
 if args.mqtt_server:
     client_name = platform.node()
@@ -575,6 +608,6 @@ if args.mqtt_server:
 c = ConnectWatch()
 c.daemon = True
 atexit.register(c.stop)
-c.start()
+#c.start()
 
 app.run(host='0.0.0.0', port=5000, debug=True)
